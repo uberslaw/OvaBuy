@@ -14,11 +14,41 @@ OvaBuy is a proof-of-concept web app for managing HP laptop and peripheral order
 - **Notifications** — in-app bell for CS and Procurement
 - **Adapter stubs** — ready for HP API, shared mailbox, and ServiceNow when access is granted
 
-## Quick start
+## Quick start (Windows PowerShell)
+
+**Prerequisites:** [Node.js 20+](https://nodejs.org/) and [Git for Windows](https://git-scm.com/download/win)
+
+```powershell
+git clone https://github.com/uberslaw/OvaBuy.git
+cd OvaBuy
+copy .env.example .env
+npm install
+npm run db:migrate
+npm run db:seed
+npm run dev
+```
+
+Open http://127.0.0.1:43123
+
+> **Important:** Run `npm install` first and wait for it to finish. Do **not** use `npx prisma` directly — that downloads Prisma 7 which is incompatible. Always use `npm run db:migrate` which uses the project's Prisma 5.
+
+### Troubleshooting Windows
+
+| Error | Fix |
+|-------|-----|
+| `Could not read package.json` | Make sure you're inside the cloned `OvaBuy` folder (`dir` should show `package.json`) |
+| `'next' is not recognized` | Run `npm install` first — dependencies aren't installed yet |
+| Prisma `url is no longer supported` | You ran `npx prisma` instead of `npm run db:migrate`. Delete `node_modules`, run `npm install`, then `npm run db:migrate` |
+| `'tsx' is not recognized` | Same as above — `npm install` didn't complete |
+
+## Quick start (macOS / Linux)
 
 ```bash
+git clone https://github.com/uberslaw/OvaBuy.git
+cd OvaBuy
+cp .env.example .env
 npm install
-npx prisma migrate dev
+npm run db:migrate
 npm run db:seed
 npm run dev
 ```
