@@ -331,8 +331,13 @@ export default function OrderDetailPage() {
                     <p className="text-slate-500 mb-1">Attachments</p>
                     <ul className="space-y-1">
                       {order.attachments.map((a) => (
-                        <li key={a.id} className="text-indigo-600">
-                          {a.filename}
+                        <li key={a.id}>
+                          <a
+                            href={`/api/orders/${order.id}/attachments/${a.id}`}
+                            className="text-indigo-600 hover:underline"
+                          >
+                            {a.filename}
+                          </a>
                         </li>
                       ))}
                     </ul>
