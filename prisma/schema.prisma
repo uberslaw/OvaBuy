@@ -1,0 +1,190 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Office {
+  id             String   @id @default(cuid())
+  name           String   @unique
+  region         String   @default("APAC")
+  currency       String
+  budgetTotal    Float
+  budgetReserved Float    @default(0)
+  budgetSpent    Float    @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  users  User[]
+  orders Order[]
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      String
+  officeId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  office              Office?              @relation(fields: [officeId], references: [id])
+  ordersCreated       Order[]              @relation("OrderCreator")
+  statusEvents        OrderStatusEvent[]
+  attachments         OrderAttachment[]
+  notifications       Notification[]
+  catalogRefreshLogs  CatalogRefreshLog[]
+  budgetAdjustments   BudgetAdjustment[]
+  inboundEmails       InboundEmailRecord[]
+  integrationLogs     ExternalIntegrationLog[]
+}
+
+model CatalogItem {
+  id              String   @id @default(cuid())
+  category        String
+  brand           String
+  name            String
+  sku             String   @unique
+  unitCost        Float
+  leadTimeDays    Int
+  isActive        Boolean  @default(true)
+  source          String   @default("seed")
+  lastRefreshedAt DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  lineItems OrderLineItem[]
+}
+
+model CatalogRefreshLog {
+  id            String   @id @default(cuid())
+  requestedAt   DateTime @default(now())
+  requestedById String
+  itemCount     Int
+  status        String
+  message       String?
+
+  requestedBy User @relation(fields: [requestedById], references: [id])
+}
+
+model Order {
+  id                 String   @id @default(cuid())
+  orderNumber        String   @unique
+  officeId           String
+  createdById        String
+  status             String   @default("REQUESTED")
+  urgent             Boolean  @default(false)
+  requiredDate       DateTime
+  businessCase       String
+  businessCasePreset String?
+  jobNumber          String?
+  costCentre         String?
+  hpOrderNumber      String?
+  servicenowRef      String?
+  totalAmount        Float    @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  office          Office                   @relation(fields: [officeId], references: [id])
+  createdBy       User                     @relation("OrderCreator", fields: [createdById], references: [id])
+  lineItems       OrderLineItem[]
+  attachments     OrderAttachment[]
+  statusEvents    OrderStatusEvent[]
+  notifications   Notification[]
+  inboundEmails   InboundEmailRecord[]
+  integrationLogs ExternalIntegrationLog[]
+}
+
+model OrderLineItem {
+  id                String @id @default(cuid())
+  orderId           String
+  catalogItemId     String
+  quantity          Int
+  deliveredQuantity Int    @default(0)
+  unitCostAtOrder   Float
+
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  catalogItem CatalogItem @relation(fields: [catalogItemId], references: [id])
+}
+
+model OrderAttachment {
+  id           String   @id @default(cuid())
+  orderId      String
+  filename     String
+  path         String
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  order      Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  uploadedBy User  @relation(fields: [uploadedById], references: [id])
+}
+
+model OrderStatusEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  status    String
+  comment   String?
+  actorId   String
+  metadata  String?
+  createdAt DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  actor User  @relation(fields: [actorId], references: [id])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  orderId   String?
+  type      String
+  message   String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model InboundEmailRecord {
+  id                String   @id @default(cuid())
+  orderId           String?
+  rawContent        String
+  parsedOrderNumber String?
+  parsedStatus      String?
+  importedById      String
+  createdAt         DateTime @default(now())
+
+  order      Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  importedBy User   @relation(fields: [importedById], references: [id])
+}
+
+model ExternalIntegrationLog {
+  id          String   @id @default(cuid())
+  orderId     String?
+  adapter     String
+  action      String
+  payload     String
+  response    String?
+  status      String   @default("STUB")
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  order     Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  createdBy User?  @relation(fields: [createdById], references: [id])
+}
+
+model BudgetAdjustment {
+  id           String   @id @default(cuid())
+  officeId     String
+  previousTotal Float
+  newTotal     Float
+  reason       String?
+  adjustedById String
+  createdAt    DateTime @default(now())
+
+  adjustedBy User @relation(fields: [adjustedById], references: [id])
+}

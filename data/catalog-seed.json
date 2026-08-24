@@ -1,0 +1,114 @@
+[
+  {
+    "category": "LAPTOP",
+    "brand": "HP",
+    "name": "HP EliteBook 840 G11",
+    "sku": "HP-EB840-G11",
+    "unitCost": 1899,
+    "leadTimeDays": 10
+  },
+  {
+    "category": "LAPTOP",
+    "brand": "HP",
+    "name": "HP EliteBook 1040 G11",
+    "sku": "HP-EB1040-G11",
+    "unitCost": 2499,
+    "leadTimeDays": 12
+  },
+  {
+    "category": "LAPTOP",
+    "brand": "HP",
+    "name": "HP ZBook Power G11",
+    "sku": "HP-ZBP-G11",
+    "unitCost": 3299,
+    "leadTimeDays": 14
+  },
+  {
+    "category": "LAPTOP",
+    "brand": "HP",
+    "name": "HP ProBook 450 G11",
+    "sku": "HP-PB450-G11",
+    "unitCost": 1299,
+    "leadTimeDays": 8
+  },
+  {
+    "category": "MONITOR",
+    "brand": "HP",
+    "name": "HP E24 G5 24\" Monitor",
+    "sku": "HP-E24-G5",
+    "unitCost": 289,
+    "leadTimeDays": 5
+  },
+  {
+    "category": "HEADSET",
+    "brand": "Poly",
+    "name": "Poly Voyager Focus 2",
+    "sku": "POLY-VF2",
+    "unitCost": 349,
+    "leadTimeDays": 4
+  },
+  {
+    "category": "KEYBOARD",
+    "brand": "HP",
+    "name": "HP USB Keyboard & Mouse Combo",
+    "sku": "HP-KM-COMBO",
+    "unitCost": 59,
+    "leadTimeDays": 3
+  },
+  {
+    "category": "MOUSE",
+    "brand": "HP",
+    "name": "HP 320M Wireless Mouse",
+    "sku": "HP-320M",
+    "unitCost": 29,
+    "leadTimeDays": 3
+  },
+  {
+    "category": "CABLE",
+    "brand": "HP",
+    "name": "DisplayPort 1.4 Cable 2m",
+    "sku": "HP-DP-2M",
+    "unitCost": 19,
+    "leadTimeDays": 2
+  },
+  {
+    "category": "CABLE",
+    "brand": "HP",
+    "name": "HDMI 2.1 Cable 2m",
+    "sku": "HP-HDMI-2M",
+    "unitCost": 15,
+    "leadTimeDays": 2
+  },
+  {
+    "category": "CABLE",
+    "brand": "HP",
+    "name": "USB-C to USB-C Cable 1m",
+    "sku": "HP-USBC-1M",
+    "unitCost": 22,
+    "leadTimeDays": 2
+  },
+  {
+    "category": "POWERPACK",
+    "brand": "HP",
+    "name": "HP 65W USB-C Power Adapter",
+    "sku": "HP-65W-USBC",
+    "unitCost": 79,
+    "leadTimeDays": 4
+  },
+  {
+    "category": "POWERPACK",
+    "brand": "HP",
+    "name": "HP 90W Smart AC Adapter",
+    "sku": "HP-90W-AC",
+    "unitCost": 89,
+    "leadTimeDays": 4
+  },
+  {
+    "category": "OTHER",
+    "brand": "HP",
+    "name": "HP USB-C Dock G5",
+    "sku": "HP-DOCK-G5",
+    "unitCost": 249,
+    "leadTimeDays": 6
+  }
+]
