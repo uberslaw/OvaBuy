@@ -16,30 +16,38 @@ OvaBuy is a proof-of-concept web app for managing HP laptop and peripheral order
 
 ## Launch Control (Windows)
 
-Double-click or run from Master Launch Control:
+Heimdall-style structure: thin **CMD** → hidden **PowerShell WinForms** UI + **Monitor** probes.
 
-```
+| File | Role |
+|------|------|
+| `scripts\OvaBuy-LaunchControl.cmd` | Master-facing entry (MLC scan / double-click) |
+| `scripts\OvaBuy-LaunchControl.ps1` | WinForms UI: start/stop, setup, logs, follow tail |
+| `scripts\OvaBuy.Monitor.ps1` | Port/health probes (dot-sourced) |
+| `scripts\launch-control.json` | Master Launch Control Generic sidecar |
+
+**Logs:** `%LOCALAPPDATA%\OvaBuy\logs\`
+- `launch-control-{timestamp}.log` — session log
+- `launch-control-live.log` — stable tail for MLC
+- `dev-server.log` — npm run dev output
+
+```bat
 scripts\OvaBuy-LaunchControl.cmd
 ```
 
-Menu options: **Start** (setup if needed + dev server), **Setup**, **Open browser**, **Stop**, **Status**.
-
-One-liners:
+**ActionOnly modes** (for automation / MLC):
 
 ```bat
-scripts\OvaBuy-LaunchControl.cmd start
-scripts\OvaBuy-LaunchControl.cmd setup
-scripts\OvaBuy-LaunchControl.cmd open
-scripts\OvaBuy-LaunchControl.cmd stop
+scripts\OvaBuy-LaunchControl.cmd -ActionOnly -Mode Start
+scripts\OvaBuy-LaunchControl.cmd -ActionOnly -Mode Stop
+scripts\OvaBuy-LaunchControl.cmd -ActionOnly -Mode Setup
+scripts\OvaBuy-LaunchControl.cmd -ActionOnly -Mode OpenLogs
 ```
 
 ### Register in Master Launch Control
 
 1. **Add app** → Display name: `OvaBuy`, Launch path: `...\OvaBuy\scripts\OvaBuy-LaunchControl.cmd`, Adapter: **Generic**
 2. Or **Scan folder** on your OvaBuy directory
-3. MLC **Open** opens http://127.0.0.1:43123; **Open Launch Control** runs the menu above
-
-Sidecar: [`scripts/launch-control.json`](scripts/launch-control.json)
+3. MLC **Open** → browser; **Open Launch Control** → WinForms UI; **Diagnostics** → flag file in logs folder
 
 ## Quick start (Windows PowerShell)
 
