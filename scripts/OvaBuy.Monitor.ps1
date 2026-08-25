@@ -1,4 +1,4 @@
-# OvaBuy.Monitor.ps1 — cheap status probes for Launch Control (dot-source from GUI + runspace).
+# OvaBuy.Monitor.ps1 - status probes for Launch Control (dot-source from GUI + runspace).
 
 function Hide-OvaBuyHostConsole {
     try {
@@ -18,22 +18,67 @@ public class OvaBuyConsole {
     catch { }
 }
 
+function Expand-OvaBuyEnvPath {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
+    $expanded = [Environment]::ExpandEnvironmentVariables($Path)
+    return $expanded
+}
+
+function Get-OvaBuyLaunchControlManifest {
+    param([string]$ScriptDir)
+    $manifestPath = Join-Path $ScriptDir "launch-control.json"
+    if (-not (Test-Path -LiteralPath $manifestPath)) { return $null }
+    try {
+        $raw = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        return $raw
+    }
+    catch {
+        return $null
+    }
+}
+
 function Get-OvaBuyPaths {
     param([string]$ScriptDir)
     $repoRoot = Split-Path -Parent $ScriptDir
-    @{
+    $manifest = Get-OvaBuyLaunchControlManifest -ScriptDir $ScriptDir
+    $logRoot = Expand-OvaBuyEnvPath "%LOCALAPPDATA%\OvaBuy\logs"
+    $url = if ($manifest -and $manifest.browserUrl) { $manifest.browserUrl.TrimEnd('/') } else { "http://127.0.0.1:43123" }
+    $healthUrl = if ($manifest -and $manifest.healthUrl) { $manifest.healthUrl } else { "$url/api/health" }
+  @{
         ScriptDir   = $ScriptDir
         RepoRoot    = $repoRoot
-        LogRoot     = Join-Path $env:LOCALAPPDATA "OvaBuy\logs"
-        LiveLog     = Join-Path $env:LOCALAPPDATA "OvaBuy\logs\launch-control-live.log"
-        DevServerLog = Join-Path $env:LOCALAPPDATA "OvaBuy\logs\dev-server.log"
-        DiagnosticsFlag = Join-Path $env:LOCALAPPDATA "OvaBuy\logs\diagnostics.enabled"
+        LogRoot     = $logRoot
+        LiveLog     = Join-Path $logRoot "launch-control-live.log"
+        DevServerLog = Join-Path $logRoot "dev-server.log"
+        RedeployDeployLog = Join-Path $logRoot "redeploy-deploy.log"
+        DiagnosticsFlag = if ($manifest -and $manifest.diagnosticsFlagPath) {
+            Expand-OvaBuyEnvPath $manifest.diagnosticsFlagPath
+        } else {
+            Join-Path $logRoot "diagnostics.enabled"
+        }
+        PidFile     = Join-Path $logRoot "ovabuy-server.pid"
+        ModeFile    = Join-Path $logRoot "ovabuy-server.mode"
         EnvFile     = Join-Path $repoRoot ".env"
         EnvExample  = Join-Path $repoRoot ".env.example"
         Database    = Join-Path $repoRoot "prisma\dev.db"
-        Url         = "http://127.0.0.1:43123"
+        Url         = $url
+        HealthUrl   = $healthUrl
         Port        = 43123
+        Manifest    = $manifest
     }
+}
+
+function Get-OvaBuyAppVersion {
+    param([string]$RepoRoot)
+    try {
+        $pkgPath = Join-Path $RepoRoot "package.json"
+        if (-not (Test-Path -LiteralPath $pkgPath)) { return $null }
+        $pkg = Get-Content -LiteralPath $pkgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($pkg.version) { return [string]$pkg.version }
+    }
+    catch { }
+    return $null
 }
 
 function Test-OvaBuyPortListening {
@@ -50,7 +95,7 @@ function Test-OvaBuyPortListening {
 
 function Test-OvaBuyHealth {
     param(
-        [string]$Url = "http://127.0.0.1:43123/login",
+        [string]$Url = "http://127.0.0.1:43123/api/health",
         [int]$TimeoutSec = 3
     )
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -60,12 +105,17 @@ function Test-OvaBuyHealth {
         $req.Timeout = $TimeoutSec * 1000
         $resp = $req.GetResponse()
         $code = [int]$resp.StatusCode
+        $stream = $resp.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($stream)
+        $body = $reader.ReadToEnd()
+        $reader.Close()
         $resp.Close()
         $sw.Stop()
         return @{
             Ok = ($code -ge 200 -and $code -lt 400)
             StatusCode = $code
             LatencyMs = [int]$sw.ElapsedMilliseconds
+            Body = $body
             Error = $null
         }
     }
@@ -75,9 +125,23 @@ function Test-OvaBuyHealth {
             Ok = $false
             StatusCode = 0
             LatencyMs = [int]$sw.ElapsedMilliseconds
+            Body = $null
             Error = $_.Exception.Message
         }
     }
+}
+
+function Get-OvaBuyHealthVersion {
+    param([string]$Url = "http://127.0.0.1:43123/api/health")
+    $health = Test-OvaBuyHealth -Url $Url
+    if (-not $health.Ok -or -not $health.Body) { return $null }
+    try {
+        $json = $health.Body | ConvertFrom-Json
+        if ($json.productVersion) { return [string]$json.productVersion }
+        if ($json.version) { return "OvaBuy $($json.version)" }
+    }
+    catch { }
+    return $null
 }
 
 function Get-OvaBuyNodeVersion {
@@ -89,18 +153,101 @@ function Get-OvaBuyNodeVersion {
     return $null
 }
 
+function Get-OvaBuyServerMode {
+    param($Paths)
+    if (Test-Path -LiteralPath $Paths.ModeFile) {
+        $mode = (Get-Content -LiteralPath $Paths.ModeFile -Raw).Trim().ToLowerInvariant()
+        if ($mode -in @("dev", "prod")) { return $mode }
+    }
+    return "dev"
+}
+
+function Set-OvaBuyServerMode {
+    param(
+        $Paths,
+        [ValidateSet("dev", "prod")]
+        [string]$Mode
+    )
+    if (-not (Test-Path -LiteralPath $Paths.LogRoot)) {
+        New-Item -ItemType Directory -Path $Paths.LogRoot -Force | Out-Null
+    }
+    Set-Content -LiteralPath $Paths.ModeFile -Value $Mode -Encoding UTF8 -NoNewline
+}
+
+function Save-OvaBuyServerPid {
+    param(
+        $Paths,
+        [int]$ProcessId,
+        [ValidateSet("dev", "prod")]
+        [string]$Mode = "dev"
+    )
+    if (-not (Test-Path -LiteralPath $Paths.LogRoot)) {
+        New-Item -ItemType Directory -Path $Paths.LogRoot -Force | Out-Null
+    }
+    Set-Content -LiteralPath $Paths.PidFile -Value $ProcessId -Encoding UTF8 -NoNewline
+    Set-OvaBuyServerMode -Paths $Paths -Mode $Mode
+}
+
+function Clear-OvaBuyServerPid {
+    param($Paths)
+    if (Test-Path -LiteralPath $Paths.PidFile) {
+        Remove-Item -LiteralPath $Paths.PidFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Start-OvaBuyServerLogPump {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [string]$LogPath
+    )
+    $proc = $Process
+    [System.Threading.Tasks.Task]::Run({
+        param($p, $logPath)
+        $sw = [System.IO.StreamWriter]::new($logPath, $true, [System.Text.Encoding]::UTF8)
+        try {
+            $stdout = $p.StandardOutput
+            $stderr = $p.StandardError
+            while (-not $p.HasExited) {
+                while ($stdout.Peek() -ge 0) {
+                    $line = $stdout.ReadLine()
+                    if ($null -ne $line) { $sw.WriteLine($line); $sw.Flush() }
+                }
+                while ($stderr.Peek() -ge 0) {
+                    $line = $stderr.ReadLine()
+                    if ($null -ne $line) { $sw.WriteLine($line); $sw.Flush() }
+                }
+                Start-Sleep -Milliseconds 100
+            }
+            while (-not $stdout.EndOfStream) {
+                $line = $stdout.ReadLine()
+                if ($null -ne $line) { $sw.WriteLine($line); $sw.Flush() }
+            }
+            while (-not $stderr.EndOfStream) {
+                $line = $stderr.ReadLine()
+                if ($null -ne $line) { $sw.WriteLine($line); $sw.Flush() }
+            }
+        }
+        catch { }
+        finally { $sw.Close() }
+    }, $proc, $LogPath) | Out-Null
+}
+
 function Get-OvaBuyRuntimeSnapshot {
     param(
         [string]$RepoRoot,
         [string]$Url = "http://127.0.0.1:43123",
-        [int]$Port = 43123
+        [int]$Port = 43123,
+        [string]$HealthUrl = ""
     )
-    $pid = Test-OvaBuyPortListening -Port $Port
-    $health = if ($pid -gt 0) { Test-OvaBuyHealth -Url "$Url/login" } else { $null }
+    if (-not $HealthUrl) { $HealthUrl = "$Url/api/health" }
+    $listenPid = Test-OvaBuyPortListening -Port $Port
+    $health = if ($listenPid -gt 0) { Test-OvaBuyHealth -Url $HealthUrl } else { $null }
     $node = Get-OvaBuyNodeVersion
+    $appVersion = Get-OvaBuyAppVersion -RepoRoot $RepoRoot
+    $liveVersion = Get-OvaBuyHealthVersion -Url $HealthUrl
 
     $status = "Stopped"
-    if ($pid -gt 0) {
+    if ($listenPid -gt 0) {
         if ($health -and $health.Ok) { $status = "Running" }
         elseif ($health) { $status = "Unreachable" }
         else { $status = "Starting" }
@@ -108,10 +255,11 @@ function Get-OvaBuyRuntimeSnapshot {
 
     [pscustomobject]@{
         Status      = $status
-        Pid         = $pid
+        Pid         = $listenPid
         HealthOk    = if ($health) { $health.Ok } else { $null }
         HealthMs    = if ($health) { $health.LatencyMs } else { $null }
         HealthError = if ($health) { $health.Error } else { $null }
+        AppVersion  = if ($liveVersion) { $liveVersion } elseif ($appVersion) { "OvaBuy $appVersion" } else { $null }
         NodeVersion = $node
         HasNodeModules = Test-Path (Join-Path $RepoRoot "node_modules")
         HasDatabase = Test-Path (Join-Path $RepoRoot "prisma\dev.db")
@@ -157,8 +305,17 @@ function Get-OvaBuyFileTail {
         $buf = New-Object byte[] $readLen
         [void]$fs.Read($buf, 0, $readLen)
         $text = [System.Text.Encoding]::UTF8.GetString($buf)
-        $lines = $text -split "`r?`n" | Where-Object { $_ -ne "" }
-        return @{ Lines = $lines; NewOffset = $fs.Length }
+        $parts = $text -split "`r?`n"
+        $lines = @()
+        if ($parts.Count -gt 1) {
+            $lines = $parts[0..($parts.Count - 2)] | Where-Object { $_ -ne "" }
+        }
+        $carry = $parts[$parts.Count - 1]
+        if ($fs.Length -eq ($AfterOffset + $readLen) -and $carry) {
+            $lines += $carry
+            $carry = ""
+        }
+        return @{ Lines = $lines; NewOffset = $fs.Length - $carry.Length; Carry = $carry }
     }
     finally {
         $fs.Close()

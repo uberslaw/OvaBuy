@@ -1,28 +1,28 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  OvaBuy Launch Control — dev server, setup, logs, and status for the APAC ordering PoC.
+  OvaBuy Launch Control - service start/stop, redeploy, logs, and status for the APAC ordering PoC.
 
 .DESCRIPTION
   WinForms ops UI. Logs under %LOCALAPPDATA%\OvaBuy\logs\.
   Entry: scripts\OvaBuy-LaunchControl.cmd (hidden STA PowerShell) or Master Launch Control Generic card.
 #>
 param(
-    [ValidateSet("Menu", "Start", "Stop", "Restart", "Setup", "Open", "OpenLogs", "Status")]
+    [ValidateSet("Menu", "Start", "Stop", "Restart", "Setup", "Open", "OpenLogs", "Status", "Redeploy")]
     [string]$Mode = "Menu",
     [switch]$ActionOnly
 )
 
-# Support: OvaBuy-LaunchControl.cmd start  (legacy one-word actions)
 if ($args.Count -gt 0 -and $Mode -eq "Menu" -and -not $ActionOnly) {
     $map = @{
-        start   = "Start"
-        stop    = "Stop"
-        restart = "Restart"
-        setup   = "Setup"
-        open    = "Open"
+        start    = "Start"
+        stop     = "Stop"
+        restart  = "Restart"
+        setup    = "Setup"
+        open     = "Open"
         openlogs = "OpenLogs"
-        status  = "Status"
+        status   = "Status"
+        redeploy = "Redeploy"
     }
     $key = $args[0].ToString().ToLowerInvariant()
     if ($map.ContainsKey($key)) {
@@ -32,13 +32,9 @@ if ($args.Count -gt 0 -and $Mode -eq "Menu" -and -not $ActionOnly) {
 }
 
 $ErrorActionPreference = "Stop"
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-[System.Windows.Forms.Application]::EnableVisualStyles()
 
 $script:ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $script:ScriptDir "OvaBuy.Monitor.ps1")
-Hide-OvaBuyHostConsole
 
 $script:Paths = Get-OvaBuyPaths -ScriptDir $script:ScriptDir
 $script:RepoRoot = $script:Paths.RepoRoot
@@ -53,13 +49,26 @@ $script:UiLastChange = $null
 $script:LaunchControlBusy = $false
 $script:FollowLogs = $false
 $script:DevLogOffset = 0
+$script:DevLogCarry = ""
 $script:LastSnapshotStatus = $null
-$script:PendingEventLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
-$script:StatusPollIntervalMs = 4000
+$script:PendingEventLines = $null
+$script:StatusPollIntervalMs = 2500
 $script:LastStatusPollUtc = [DateTime]::MinValue
 $script:LatestSnapshot = $null
 $script:DevServerProcess = $null
 $script:MaxEventChars = 80000
+$script:ActionButtons = @()
+$script:WinFormsReady = $false
+
+function Initialize-OvaBuyWinForms {
+    if ($script:WinFormsReady) { return }
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    [System.Windows.Forms.Application]::EnableVisualStyles()
+    Hide-OvaBuyHostConsole
+    $script:PendingEventLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+    $script:WinFormsReady = $true
+}
 
 function Initialize-OvaBuyLogging {
     param([string]$Prefix = "launch-control")
@@ -105,32 +114,19 @@ function Write-OvaBuyLog {
     catch { }
 
     $showInUi = $Level -in @("WARN", "ERROR", "STEP", "OK") -or $script:FollowLogs
-    if ($showInUi) {
+    if ($showInUi -and $script:PendingEventLines) {
         [void]$script:PendingEventLines.Enqueue($line)
-    }
-
-    if ($script:UiLogBox -and -not $script:UiLogBox.IsDisposed -and $showInUi) {
-        $color = switch ($Level) {
-            "OK"    { [System.Drawing.Color]::FromArgb(143, 219, 168) }
-            "WARN"  { [System.Drawing.Color]::DarkGoldenrod }
-            "ERROR" { [System.Drawing.Color]::Firebrick }
-            "STEP"  { [System.Drawing.Color]::DarkBlue }
-            default { [System.Drawing.Color]::Gainsboro }
-        }
-        $script:UiLogBox.SelectionStart = $script:UiLogBox.TextLength
-        $script:UiLogBox.SelectionColor = $color
-        $script:UiLogBox.AppendText("$line`r`n")
-        if ($script:UiLogBox.TextLength -gt $script:MaxEventChars) {
-            $script:UiLogBox.Text = $script:UiLogBox.Text.Substring($script:UiLogBox.TextLength - $script:MaxEventChars)
-        }
-        $script:UiLogBox.SelectionStart = $script:UiLogBox.TextLength
-        $script:UiLogBox.ScrollToCaret()
     }
 }
 
 function Set-LaunchControlBusy {
     param([bool]$Busy)
     $script:LaunchControlBusy = $Busy
+    foreach ($btn in $script:ActionButtons) {
+        if ($btn -and -not $btn.IsDisposed) {
+            $btn.Enabled = -not $Busy
+        }
+    }
     [System.Windows.Forms.Application]::DoEvents()
 }
 
@@ -183,16 +179,20 @@ function Start-OvaBuySetup {
         Invoke-NpmLogged -Arguments "install" -StepLabel "npm install"
     }
     else {
-        Write-OvaBuyLog "node_modules present — skipping npm install"
+        Write-OvaBuyLog "node_modules present - skipping npm install"
     }
     Invoke-NpmLogged -Arguments "run db:deploy" -StepLabel "Database migrate (prisma migrate deploy)"
     Invoke-NpmLogged -Arguments "run db:seed" -StepLabel "Seed demo data"
     Write-OvaBuyLog "Setup complete. Demo: cs.singapore@demo.local / demo123" -Level OK
 }
 
-function Start-OvaBuyDevServer {
+function Start-OvaBuyServerProcess {
+    param(
+        [ValidateSet("dev", "prod")]
+        [string]$ServerMode = "dev"
+    )
     if ($script:DevServerProcess -and -not $script:DevServerProcess.HasExited) {
-        Write-OvaBuyLog "Dev server process already running (PID $($script:DevServerProcess.Id))" -Level WARN
+        Write-OvaBuyLog "Server process already tracked (PID $($script:DevServerProcess.Id))" -Level WARN
         return
     }
     $listenPid = Test-OvaBuyPortListening -Port $script:Paths.Port
@@ -213,40 +213,28 @@ function Start-OvaBuyDevServer {
         New-Item -ItemType Directory -Path $script:LogRoot -Force | Out-Null
     }
 
+    $npmArgs = if ($ServerMode -eq "prod") { "run start" } else { "run dev" }
     $npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
     if (-not $npm) { $npm = "npm" }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $npm
-    $psi.Arguments = "run dev"
+    $psi.Arguments = $npmArgs
     $psi.WorkingDirectory = $script:RepoRoot
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $script:DevServerProcess = [System.Diagnostics.Process]::Start($psi)
+    Start-OvaBuyServerLogPump -Process $script:DevServerProcess -LogPath $script:Paths.DevServerLog
+    Save-OvaBuyServerPid -Paths $script:Paths -ProcessId $script:DevServerProcess.Id -Mode $ServerMode
 
-  # Stream output to dev-server.log in background
-    $devLog = $script:Paths.DevServerLog
-    $proc = $script:DevServerProcess
-    [System.Threading.Tasks.Task]::Run({
-        param($p, $logPath)
-        $sw = [System.IO.StreamWriter]::new($logPath, $true, [System.Text.Encoding]::UTF8)
-        try {
-            while (-not $p.StandardOutput.EndOfStream) {
-                $line = $p.StandardOutput.ReadLine()
-                if ($null -ne $line) { $sw.WriteLine($line); $sw.Flush() }
-            }
-            while (-not $p.StandardError.EndOfStream) {
-                $line = $p.StandardError.ReadLine()
-                if ($null -ne $line) { $sw.WriteLine($line); $sw.Flush() }
-            }
-        }
-        catch { }
-        finally { $sw.Close() }
-    }, $proc, $devLog) | Out-Null
+    Write-OvaBuyLog "Service starting ($ServerMode) on $($script:Paths.Url) (npm PID $($script:DevServerProcess.Id))" -Level OK
+    Write-OvaBuyLog "Server log: $($script:Paths.DevServerLog)"
+}
 
-    Write-OvaBuyLog "Dev server starting on $($script:Paths.Url) (npm PID $($script:DevServerProcess.Id))" -Level OK
-    Write-OvaBuyLog "Dev server log: $devLog"
+function Start-OvaBuyDevServer {
+    $mode = Get-OvaBuyServerMode -Paths $script:Paths
+    Start-OvaBuyServerProcess -ServerMode $mode
 }
 
 function Stop-OvaBuyDevServer {
@@ -255,11 +243,55 @@ function Stop-OvaBuyDevServer {
         try { $script:DevServerProcess.Kill($true) } catch { }
     }
     $script:DevServerProcess = $null
+    Clear-OvaBuyServerPid -Paths $script:Paths
     if ($killed.Count -gt 0) {
         Write-OvaBuyLog "Stopped listener(s) on port $($script:Paths.Port): $($killed -join ', ')" -Level OK
     }
     else {
         Write-OvaBuyLog "No listener on port $($script:Paths.Port)" -Level INFO
+    }
+}
+
+function Start-OvaBuyRedeploy {
+    $redeployPs1 = Join-Path $script:ScriptDir "OvaBuy-Redeploy.ps1"
+    if (-not (Test-Path -LiteralPath $redeployPs1)) {
+        throw "Redeploy script not found: $redeployPs1"
+    }
+
+    $sessionLog = Join-Path $script:LogRoot ("redeploy-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
+    Set-Content -LiteralPath $sessionLog -Value "" -Encoding UTF8
+    Write-OvaBuyLog "Redeploy after git sync (preserves .env)" -Level STEP
+    Write-OvaBuyLog "Session log: $sessionLog"
+    Write-OvaBuyLog "Steps: stop -> npm install -> db deploy -> build -> start -> health" -Level INFO
+
+    $psArgs = @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", $redeployPs1,
+        "-RepoRoot", $script:RepoRoot,
+        "-SessionLog", $sessionLog
+    )
+    $p = Start-Process -FilePath "powershell.exe" -ArgumentList $psArgs `
+        -WorkingDirectory $script:ScriptDir -PassThru -WindowStyle Hidden -Wait
+
+    $ok = $false
+    if (Test-Path -LiteralPath $sessionLog) {
+        $ok = Select-String -LiteralPath $sessionLog -Pattern "OVABUY_REDEPLOY_OK" -Quiet -ErrorAction SilentlyContinue
+        Get-Content -LiteralPath $sessionLog -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_ -match '\[(STEP|OK|WARN|ERROR)\]') {
+                $level = $Matches[1]
+                $msg = ($_ -replace '^\[[^\]]+\]\s+\[[^\]]+\]\s+', '')
+                Write-OvaBuyLog $msg -Level $level
+            }
+        }
+    }
+
+    $script:DevServerProcess = $null
+    if ($ok) {
+        Set-OvaBuyServerMode -Paths $script:Paths -Mode "prod"
+        Write-OvaBuyLog "Redeploy complete" -Level OK
+    }
+    else {
+        throw "Redeploy failed (exit $($p.ExitCode)). See $sessionLog"
     }
 }
 
@@ -284,11 +316,11 @@ function Set-DiagnosticsEnabled {
             New-Item -ItemType Directory -Path $script:LogRoot -Force | Out-Null
         }
         Set-Content -LiteralPath $flag -Value (Get-Date -Format "o") -Encoding UTF8
-        Write-OvaBuyLog "Diagnostics enabled ($flag)" -Level OK
+        Write-OvaBuyLog "Diagnostics logging enabled ($flag)" -Level OK
     }
     elseif (Test-Path -LiteralPath $flag) {
         Remove-Item -LiteralPath $flag -Force
-        Write-OvaBuyLog "Diagnostics disabled" -Level OK
+        Write-OvaBuyLog "Diagnostics logging disabled" -Level OK
     }
 }
 
@@ -309,21 +341,24 @@ function Update-StatusUi {
         }
     }
     if ($script:UiPid) {
-        $script:UiPid.Text = if ($Snapshot.Pid -gt 0) { "PID $($Snapshot.Pid)" } else { "PID —" }
+        $script:UiPid.Text = if ($Snapshot.Pid -gt 0) { "PID $($Snapshot.Pid)" } else { "PID -" }
     }
     if ($script:UiVersion) {
         $parts = @()
+        if ($Snapshot.AppVersion) { $parts += $Snapshot.AppVersion }
         if ($Snapshot.NodeVersion) { $parts += "Node $($Snapshot.NodeVersion)" }
+        $mode = Get-OvaBuyServerMode -Paths $script:Paths
+        $parts += "mode: $mode"
         $parts += "DB: $(if ($Snapshot.HasDatabase) { 'yes' } else { 'no' })"
-        $parts += "deps: $(if ($Snapshot.HasNodeModules) { 'yes' } else { 'no' })"
         $script:UiVersion.Text = ($parts -join " | ")
     }
     if ($script:UiHealthBar) {
         if ($Snapshot.Pid -le 0) {
-            $script:UiHealthBar.Text = "Health: — (stopped)"
+            $script:UiHealthBar.Text = "Health: n/a (stopped)"
         }
         elseif ($Snapshot.HealthOk) {
-            $script:UiHealthBar.Text = "Health: ok $($Snapshot.HealthMs)ms | $($script:Paths.Url)"
+            $ver = if ($Snapshot.AppVersion) { " | $($Snapshot.AppVersion)" } else { "" }
+            $script:UiHealthBar.Text = "Health: OK $($Snapshot.HealthMs)ms$ver | $($script:Paths.HealthUrl)"
         }
         else {
             $script:UiHealthBar.Text = "Health: fail $($Snapshot.HealthError)"
@@ -343,20 +378,15 @@ function Update-StatusUi {
 }
 
 function Poll-OvaBuyStatus {
-    $snap = Get-OvaBuyRuntimeSnapshot -RepoRoot $script:RepoRoot -Url $script:Paths.Url -Port $script:Paths.Port
+    $snap = Get-OvaBuyRuntimeSnapshot -RepoRoot $script:RepoRoot -Url $script:Paths.Url -Port $script:Paths.Port -HealthUrl $script:Paths.HealthUrl
     Update-StatusUi -Snapshot $snap
     return $snap
 }
 
 function Drain-OvaBuyFollowLogs {
-    if (-not $script:FollowLogs) {
-        # Advance offset without displaying
-        $tail = Get-OvaBuyFileTail -Path $script:Paths.DevServerLog -AfterOffset $script:DevLogOffset
-        $script:DevLogOffset = $tail.NewOffset
-        return
-    }
     $tail = Get-OvaBuyFileTail -Path $script:Paths.DevServerLog -AfterOffset $script:DevLogOffset
     $script:DevLogOffset = $tail.NewOffset
+    if (-not $script:FollowLogs) { return }
     foreach ($line in $tail.Lines) {
         [void]$script:PendingEventLines.Enqueue("[dev] $line")
     }
@@ -394,20 +424,22 @@ function Invoke-LaunchControlModeAction {
         "Open"     { Open-OvaBuyBrowser }
         "OpenLogs" { Open-OvaBuyLogsFolder }
         "Status"   { Poll-OvaBuyStatus | Out-Null }
+        "Redeploy" { Start-OvaBuyRedeploy }
         default    { throw "Unknown Mode: $ModeName" }
     }
 }
 
 function Show-OvaBuyLaunchControl {
+    Initialize-OvaBuyWinForms
     Initialize-OvaBuyLogging | Out-Null
     Write-OvaBuyLog "OvaBuy Launch Control opened" -Level STEP
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "OvaBuy Launch Control"
     $form.Width = 1040
-    $form.Height = 720
+    $form.Height = 760
     $form.StartPosition = "CenterScreen"
-    $form.MinimumSize = New-Object System.Drawing.Size(900, 600)
+    $form.MinimumSize = New-Object System.Drawing.Size(900, 640)
     $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
     $form.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 36)
 
@@ -415,9 +447,10 @@ function Show-OvaBuyLaunchControl {
     $left.Left = 12
     $left.Top = 12
     $left.Width = 280
-    $left.Height = 660
+    $left.Height = 700
     $left.Anchor = "Top, Bottom, Left"
     $left.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 48)
+  $left.AutoScroll = $true
     [void]$form.Controls.Add($left)
 
     $title = New-Object System.Windows.Forms.Label
@@ -450,7 +483,7 @@ function Show-OvaBuyLaunchControl {
     [void]$left.Controls.Add($script:UiStatusBig)
 
     $script:UiPid = New-Object System.Windows.Forms.Label
-    $script:UiPid.Text = "PID —"
+    $script:UiPid.Text = "PID -"
     $script:UiPid.ForeColor = [System.Drawing.Color]::Silver
     $script:UiPid.Left = 12
     $script:UiPid.Top = 116
@@ -458,34 +491,32 @@ function Show-OvaBuyLaunchControl {
     [void]$left.Controls.Add($script:UiPid)
 
     $script:UiVersion = New-Object System.Windows.Forms.Label
-    $script:UiVersion.Text = "—"
+    $script:UiVersion.Text = "-"
     $script:UiVersion.ForeColor = [System.Drawing.Color]::Silver
     $script:UiVersion.Left = 12
     $script:UiVersion.Top = 136
     $script:UiVersion.Width = 250
-    $script:UiVersion.Height = 36
+    $script:UiVersion.Height = 48
     [void]$left.Controls.Add($script:UiVersion)
 
     $script:UiLastChange = New-Object System.Windows.Forms.Label
-    $script:UiLastChange.Text = "Last check: —"
+    $script:UiLastChange.Text = "Last check: -"
     $script:UiLastChange.ForeColor = [System.Drawing.Color]::DimGray
     $script:UiLastChange.Left = 12
-    $script:UiLastChange.Top = 176
+    $script:UiLastChange.Top = 188
     $script:UiLastChange.Width = 250
     [void]$left.Controls.Add($script:UiLastChange)
 
-    if (-not (Test-IsAdministrator)) {
-        $adminWarn = New-Object System.Windows.Forms.Label
-        $adminWarn.Text = "Not elevated — service ops N/A for this PoC."
-        $adminWarn.ForeColor = [System.Drawing.Color]::DarkGoldenrod
-        $adminWarn.Left = 12
-        $adminWarn.Top = 200
-        $adminWarn.Width = 250
-        $adminWarn.Height = 32
-        [void]$left.Controls.Add($adminWarn)
-    }
+    $note = New-Object System.Windows.Forms.Label
+    $note.Text = "After git sync use Redeploy (preserves .env)."
+    $note.ForeColor = [System.Drawing.Color]::DarkGoldenrod
+    $note.Left = 12
+    $note.Top = 212
+    $note.Width = 250
+    $note.Height = 32
+    [void]$left.Controls.Add($note)
 
-    $y = 240
+    $y = 252
     function Add-LcButton([string]$text, [scriptblock]$onClick) {
         $b = New-Object System.Windows.Forms.Button
         $b.Text = $text
@@ -498,13 +529,16 @@ function Show-OvaBuyLaunchControl {
         $b.ForeColor = [System.Drawing.Color]::White
         $b.Add_Click($onClick)
         [void]$left.Controls.Add($b)
+        [void]$script:ActionButtons.Add($b)
         $y += 38
         return $b
     }
 
-    [void](Add-LcButton "Start dev server" { Invoke-LaunchControlAction { Start-OvaBuyDevServer } })
-    [void](Add-LcButton "Stop dev server" { Invoke-LaunchControlAction { Stop-OvaBuyDevServer } })
-    [void](Add-LcButton "Restart dev server" { Invoke-LaunchControlAction { Stop-OvaBuyDevServer; Start-Sleep -Seconds 1; Start-OvaBuyDevServer } })
+    [void](Add-LcButton "Start service" { Invoke-LaunchControlAction { Start-OvaBuyDevServer } })
+    [void](Add-LcButton "Stop service" { Invoke-LaunchControlAction { Stop-OvaBuyDevServer } })
+    [void](Add-LcButton "Restart service" { Invoke-LaunchControlAction { Stop-OvaBuyDevServer; Start-Sleep -Seconds 1; Start-OvaBuyDevServer } })
+    [void](Add-LcButton "Refresh status" { Poll-OvaBuyStatus | Out-Null })
+    [void](Add-LcButton "Redeploy (preserve config)" { Invoke-LaunchControlAction { Start-OvaBuyRedeploy } })
     [void](Add-LcButton "Setup (install + DB)" { Invoke-LaunchControlAction { Start-OvaBuySetup } })
     [void](Add-LcButton "Open in browser" { Open-OvaBuyBrowser })
     [void](Add-LcButton "Open logs folder" { Open-OvaBuyLogsFolder })
@@ -516,26 +550,24 @@ function Show-OvaBuyLaunchControl {
     }
     $script:btnFollowRef = $btnFollow
 
-    $btnDiag = Add-LcButton "Diagnostics: OFF" {
+    $btnDiag = Add-LcButton "Diagnostics logging: OFF" {
         $on = -not (Test-DiagnosticsEnabled)
         Set-DiagnosticsEnabled -Enabled $on
-        $script:btnDiagRef.Text = if ($on) { "Diagnostics: ON" } else { "Diagnostics: OFF" }
+        $script:btnDiagRef.Text = if ($on) { "Diagnostics logging: ON" } else { "Diagnostics logging: OFF" }
     }
     $script:btnDiagRef = $btnDiag
-    if (Test-DiagnosticsEnabled) { $btnDiag.Text = "Diagnostics: ON" }
-
-    [void](Add-LcButton "Refresh status" { Poll-OvaBuyStatus | Out-Null })
+    if (Test-DiagnosticsEnabled) { $btnDiag.Text = "Diagnostics logging: ON" }
 
     $right = New-Object System.Windows.Forms.Panel
     $right.Left = 300
     $right.Top = 12
     $right.Width = 720
-    $right.Height = 660
+    $right.Height = 700
     $right.Anchor = "Top, Bottom, Left, Right"
     [void]$form.Controls.Add($right)
 
     $script:UiHealthBar = New-Object System.Windows.Forms.Label
-    $script:UiHealthBar.Text = "Health: —"
+    $script:UiHealthBar.Text = "Health: n/a"
     $script:UiHealthBar.BackColor = [System.Drawing.Color]::FromArgb(25, 25, 30)
     $script:UiHealthBar.ForeColor = [System.Drawing.Color]::Gainsboro
     $script:UiHealthBar.Left = 0
@@ -548,7 +580,7 @@ function Show-OvaBuyLaunchControl {
     [void]$right.Controls.Add($script:UiHealthBar)
 
     $eventsCaption = New-Object System.Windows.Forms.Label
-    $eventsCaption.Text = "Events (status changes + WARN/ERROR; Follow logs for dev-server tail)"
+    $eventsCaption.Text = "Events (status changes + WARN/ERROR; Follow logs for server tail)"
     $eventsCaption.ForeColor = [System.Drawing.Color]::Gray
     $eventsCaption.Left = 0
     $eventsCaption.Top = 34
@@ -561,7 +593,7 @@ function Show-OvaBuyLaunchControl {
     $script:UiLogBox.Left = 0
     $script:UiLogBox.Top = 56
     $script:UiLogBox.Width = 720
-    $script:UiLogBox.Height = 600
+    $script:UiLogBox.Height = 640
     $script:UiLogBox.Anchor = "Top, Bottom, Left, Right"
     $script:UiLogBox.BackColor = [System.Drawing.Color]::FromArgb(18, 18, 22)
     $script:UiLogBox.ForeColor = [System.Drawing.Color]::Gainsboro
@@ -594,8 +626,7 @@ function Show-OvaBuyLaunchControl {
     $timer.Start()
 
     $form.Add_FormClosing({
-        # Do not stop dev server on LC close — product keeps running (LC vs app separation)
-        Write-OvaBuyLog "Launch Control closing (dev server left running)" -Level INFO
+        Write-OvaBuyLog "Launch Control closing (service left running)" -Level INFO
     })
 
     Poll-OvaBuyStatus | Out-Null
@@ -619,8 +650,13 @@ catch {
     if ($script:LogPath) {
         Add-Content -LiteralPath $script:LogPath -Value "[ERROR] $msg" -Encoding UTF8
     }
-    [System.Windows.Forms.MessageBox]::Show(
-        "OvaBuy Launch Control crashed:`r`n$msg`r`n`r`nLog: $($script:LogPath)",
-        "OvaBuy Launch Control", "OK", "Error") | Out-Null
+    if ($script:WinFormsReady) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "OvaBuy Launch Control crashed:`r`n$msg`r`n`r`nLog: $($script:LogPath)",
+            "OvaBuy Launch Control", "OK", "Error") | Out-Null
+    }
+    else {
+        Write-Error $msg
+    }
     exit 1
 }

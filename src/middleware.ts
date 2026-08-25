@@ -1,12 +1,19 @@
 import { auth } from "@/auth";
+import { logDiagnostic } from "@/lib/diagnostics";
 import { NextResponse } from "next/server";
 
 export default auth((req) => {
   const isLoggedIn = !!req.auth;
   const { pathname } = req.nextUrl;
 
-  const publicPaths = ["/login", "/api/auth"];
+  const publicPaths = ["/login", "/api/auth", "/api/health"];
   const isPublic = publicPaths.some((p) => pathname.startsWith(p));
+
+  logDiagnostic("request", {
+    method: req.method,
+    pathname,
+    authenticated: isLoggedIn,
+  });
 
   if (!isLoggedIn && !isPublic) {
     return NextResponse.redirect(new URL("/login", req.url));

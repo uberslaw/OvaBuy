@@ -21,7 +21,8 @@ Heimdall-style structure: thin **CMD** → hidden **PowerShell WinForms** UI + *
 | File | Role |
 |------|------|
 | `scripts\OvaBuy-LaunchControl.cmd` | Master-facing entry (MLC scan / double-click) |
-| `scripts\OvaBuy-LaunchControl.ps1` | WinForms UI: start/stop, setup, logs, follow tail |
+| `scripts\OvaBuy-LaunchControl.ps1` | WinForms UI: start/stop, redeploy, logs, follow tail |
+| `scripts\OvaBuy-Redeploy.ps1` | Post-git-sync redeploy (install, migrate, build, restart; preserves `.env`) |
 | `scripts\OvaBuy.Monitor.ps1` | Port/health probes (dot-sourced) |
 | `scripts\launch-control.json` | Master Launch Control Generic sidecar |
 
@@ -34,14 +35,19 @@ Heimdall-style structure: thin **CMD** → hidden **PowerShell WinForms** UI + *
 scripts\OvaBuy-LaunchControl.cmd
 ```
 
+**Typical workflow after RepoSync / git pull:** open Launch Control, click **Redeploy (preserve config)**. That runs `npm install`, `db:deploy`, `next build`, and restarts the production server without touching `.env`.
+
 **ActionOnly modes** (for automation / MLC):
 
 ```bat
 scripts\OvaBuy-LaunchControl.cmd -ActionOnly -Mode Start
 scripts\OvaBuy-LaunchControl.cmd -ActionOnly -Mode Stop
+scripts\OvaBuy-LaunchControl.cmd -ActionOnly -Mode Redeploy
 scripts\OvaBuy-LaunchControl.cmd -ActionOnly -Mode Setup
 scripts\OvaBuy-LaunchControl.cmd -ActionOnly -Mode OpenLogs
 ```
+
+**Health / version:** `GET http://127.0.0.1:43123/api/health` returns `version` and `productVersion` for Launch Control and Master Launch Control cards.
 
 ### Register in Master Launch Control
 

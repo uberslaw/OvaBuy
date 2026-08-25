@@ -2,16 +2,25 @@
   "productId": "ovabuy",
   "productName": "OvaBuy",
   "serviceNames": [],
-  "healthUrl": "http://127.0.0.1:43123/login",
+  "healthUrl": "http://127.0.0.1:43123/api/health",
   "browserUrl": "http://127.0.0.1:43123",
   "logDirs": [
     "%LOCALAPPDATA%\\OvaBuy\\logs"
   ],
   "logPaths": [
     "%LOCALAPPDATA%\\OvaBuy\\logs\\launch-control-live.log",
-    "%LOCALAPPDATA%\\OvaBuy\\logs\\dev-server.log"
+    "%LOCALAPPDATA%\\OvaBuy\\logs\\dev-server.log",
+    "%LOCALAPPDATA%\\OvaBuy\\logs\\redeploy-deploy.log"
   ],
   "diagnosticsFlagPath": "%LOCALAPPDATA%\\OvaBuy\\logs\\diagnostics.enabled",
   "showVenvUi": false,
-  "showBrowser": true
+  "showBrowser": true,
+  "processFallback": {
+    "fileName": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "arguments": "-NoProfile -ExecutionPolicy Bypass -File \"OvaBuy-LaunchControl.ps1\" -ActionOnly -Mode Start",
+    "workingDirectory": ".",
+    "pidFile": "%LOCALAPPDATA%\\OvaBuy\\logs\\ovabuy-server.pid",
+    "logPath": "%LOCALAPPDATA%\\OvaBuy\\logs\\dev-server.log",
+    "port": 43123
+  }
 }
