@@ -1,0 +1,13 @@
+{
+  "productId": "ovabuy",
+  "productName": "OvaBuy",
+  "serviceNames": [],
+  "healthUrl": "http://127.0.0.1:43123/login",
+  "browserUrl": "http://127.0.0.1:43123",
+  "logDirs": [
+    "%LOCALAPPDATA%\\OvaBuy\\logs"
+  ],
+  "logPaths": [],
+  "showVenvUi": false,
+  "showBrowser": true
+}

@@ -9,6 +9,7 @@
     "lint": "eslint",
     "setup": "npm install && npm run db:migrate && npm run db:seed",
     "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "db:reset": "prisma migrate reset --force",
     "postinstall": "prisma generate"

@@ -14,6 +14,33 @@ OvaBuy is a proof-of-concept web app for managing HP laptop and peripheral order
 - **Notifications** — in-app bell for CS and Procurement
 - **Adapter stubs** — ready for HP API, shared mailbox, and ServiceNow when access is granted
 
+## Launch Control (Windows)
+
+Double-click or run from Master Launch Control:
+
+```
+scripts\OvaBuy-LaunchControl.cmd
+```
+
+Menu options: **Start** (setup if needed + dev server), **Setup**, **Open browser**, **Stop**, **Status**.
+
+One-liners:
+
+```bat
+scripts\OvaBuy-LaunchControl.cmd start
+scripts\OvaBuy-LaunchControl.cmd setup
+scripts\OvaBuy-LaunchControl.cmd open
+scripts\OvaBuy-LaunchControl.cmd stop
+```
+
+### Register in Master Launch Control
+
+1. **Add app** → Display name: `OvaBuy`, Launch path: `...\OvaBuy\scripts\OvaBuy-LaunchControl.cmd`, Adapter: **Generic**
+2. Or **Scan folder** on your OvaBuy directory
+3. MLC **Open** opens http://127.0.0.1:43123; **Open Launch Control** runs the menu above
+
+Sidecar: [`scripts/launch-control.json`](scripts/launch-control.json)
+
 ## Quick start (Windows PowerShell)
 
 **Prerequisites:** [Node.js 20+](https://nodejs.org/) and [Git for Windows](https://git-scm.com/download/win)
@@ -84,7 +111,7 @@ Estimated delivery: 3-5 business days.
 
 ## Environment variables
 
-Copy `.env` and adjust as needed:
+Copy `.env.example` to `.env` and adjust as needed:
 
 ```
 DATABASE_URL="file:./dev.db"
@@ -117,31 +144,6 @@ Adapters live in [`src/lib/adapters/`](src/lib/adapters/).
 - Prisma + SQLite
 - NextAuth (credentials provider)
 
-## Repository access
+## Repository
 
-- **Browse:** https://cursor.com/codebase/chris-don-wheelio/laptop-ordering
-- **Visibility:** Private (changeable in settings on that page)
-
-### Clone on Windows (via WSL)
-
-The Origin CLI is not available in PowerShell — use WSL:
-
-```bash
-# Install the Origin CLI
-curl -fsSL https://downloads.cursor.com/origin/install.sh | sh
-
-# Sign in (also sets up git credentials)
-origin auth login
-
-# Clone the repository
-origin repo clone chris-don-wheelio/laptop-ordering
-```
-
-If `origin` is not found after install:
-
-```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-**Origin CLI docs:** https://cursor.com/docs/origin/cli
+- **GitHub:** https://github.com/uberslaw/OvaBuy
