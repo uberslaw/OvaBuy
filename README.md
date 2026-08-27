@@ -26,7 +26,7 @@ Heimdall-style structure: thin **CMD** → hidden **PowerShell WinForms** UI + *
 | `scripts\OvaBuy.Monitor.ps1` | Port/health probes (dot-sourced) |
 | `scripts\launch-control.json` | Master Launch Control Generic sidecar |
 
-**Logs:** `%LOCALAPPDATA%\OvaBuy\logs\`
+**Logs:** `C:\OvaBuy\logs\` (repo-local; shared across profiles that run LC)
 - `launch-control-{timestamp}.log` — session log
 - `launch-control-live.log` — stable tail for MLC
 - `dev-server.log` — npm run dev output

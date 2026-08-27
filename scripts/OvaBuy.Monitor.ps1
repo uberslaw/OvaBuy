@@ -42,7 +42,7 @@ function Get-OvaBuyPaths {
     param([string]$ScriptDir)
     $repoRoot = Split-Path -Parent $ScriptDir
     $manifest = Get-OvaBuyLaunchControlManifest -ScriptDir $ScriptDir
-    $logRoot = Expand-OvaBuyEnvPath "%LOCALAPPDATA%\OvaBuy\logs"
+    $logRoot = Join-Path $repoRoot "logs"
     $url = if ($manifest -and $manifest.browserUrl) { $manifest.browserUrl.TrimEnd('/') } else { "http://127.0.0.1:43123" }
     $healthUrl = if ($manifest -and $manifest.healthUrl) { $manifest.healthUrl } else { "$url/api/health" }
   @{
@@ -84,13 +84,66 @@ function Get-OvaBuyAppVersion {
 function Test-OvaBuyPortListening {
     param([int]$Port = 43123)
     try {
-        $lines = netstat -ano -p tcp 2>$null | Select-String ":$Port\s" | Select-String "LISTENING"
+        $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($conn -and $conn.OwningProcess -gt 0) {
+            return [int]$conn.OwningProcess
+        }
+    }
+    catch { }
+
+    try {
+        $lines = @(netstat -ano -p tcp 2>$null)
         foreach ($line in $lines) {
-            if ($line -match '\s+(\d+)\s*$') { return [int]$Matches[1] }
+            if ($line -notmatch 'LISTENING') { continue }
+            # Match local endpoint ...:43123 with trailing whitespace before remote endpoint
+            if ($line -match "^\s*TCP\s+\S+:$Port\s+\S+\s+LISTENING\s+(\d+)\s*$") {
+                return [int]$Matches[1]
+            }
         }
     }
     catch { }
     return 0
+}
+
+function Stop-OvaBuyServer {
+    param([int]$Port = 43123)
+    $result = @{
+        Killed = @()
+        Failed = @()
+        Found  = @()
+    }
+
+    try {
+        $result.Found += @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique)
+    }
+    catch { }
+
+    if ($result.Found.Count -eq 0) {
+        try {
+            $lines = @(netstat -ano -p tcp 2>$null)
+            foreach ($line in $lines) {
+                if ($line -notmatch 'LISTENING') { continue }
+                if ($line -match "^\s*TCP\s+\S+:$Port\s+\S+\s+LISTENING\s+(\d+)\s*$") {
+                    $result.Found += [int]$Matches[1]
+                }
+            }
+        }
+        catch { }
+    }
+
+    $result.Found = @($result.Found | Where-Object { $_ -gt 0 } | Select-Object -Unique)
+    foreach ($procId in $result.Found) {
+        $out = & taskkill.exe /PID $procId /T /F 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0) {
+            $result.Killed += $procId
+        }
+        else {
+            $result.Failed += @{ Pid = $procId; Detail = $out.Trim() }
+        }
+    }
+    return $result
 }
 
 function Test-OvaBuyHealth {
@@ -200,9 +253,9 @@ function Start-OvaBuyServerLogPump {
         [System.Diagnostics.Process]$Process,
         [string]$LogPath
     )
-    $proc = $Process
-    [System.Threading.Tasks.Task]::Run({
-        param($p, $logPath)
+    $p = $Process
+    $logPath = $LogPath
+    [System.Threading.Tasks.Task]::Run([Action]{
         $sw = [System.IO.StreamWriter]::new($logPath, $true, [System.Text.Encoding]::UTF8)
         try {
             $stdout = $p.StandardOutput
@@ -229,7 +282,7 @@ function Start-OvaBuyServerLogPump {
         }
         catch { }
         finally { $sw.Close() }
-    }, $proc, $LogPath) | Out-Null
+    }) | Out-Null
 }
 
 function Get-OvaBuyRuntimeSnapshot {
@@ -241,15 +294,21 @@ function Get-OvaBuyRuntimeSnapshot {
     )
     if (-not $HealthUrl) { $HealthUrl = "$Url/api/health" }
     $listenPid = Test-OvaBuyPortListening -Port $Port
-    $health = if ($listenPid -gt 0) { Test-OvaBuyHealth -Url $HealthUrl } else { $null }
+    $health = $null
+    if ($listenPid -gt 0) {
+        $health = Test-OvaBuyHealth -Url $HealthUrl
+        if (-not $health.Ok) {
+            $loginProbe = Test-OvaBuyHealth -Url "$Url/login"
+            if ($loginProbe.Ok) { $health = $loginProbe }
+        }
+    }
     $node = Get-OvaBuyNodeVersion
     $appVersion = Get-OvaBuyAppVersion -RepoRoot $RepoRoot
-    $liveVersion = Get-OvaBuyHealthVersion -Url $HealthUrl
+    $liveVersion = if ($health -and $health.Ok) { Get-OvaBuyHealthVersion -Url $HealthUrl } else { $null }
 
     $status = "Stopped"
     if ($listenPid -gt 0) {
         if ($health -and $health.Ok) { $status = "Running" }
-        elseif ($health) { $status = "Unreachable" }
         else { $status = "Starting" }
     }
 
@@ -266,25 +325,6 @@ function Get-OvaBuyRuntimeSnapshot {
         HasEnv = Test-Path (Join-Path $RepoRoot ".env")
         CheckedAt   = Get-Date
     }
-}
-
-function Stop-OvaBuyServer {
-    param([int]$Port = 43123)
-    $killed = @()
-    try {
-        $lines = netstat -ano -p tcp 2>$null | Select-String ":$Port\s" | Select-String "LISTENING"
-        foreach ($line in $lines) {
-            if ($line -match '\s+(\d+)\s*$') {
-                $procId = [int]$Matches[1]
-                if ($procId -gt 0 -and $killed -notcontains $procId) {
-                    & taskkill.exe /PID $procId /T /F 2>$null | Out-Null
-                    $killed += $procId
-                }
-            }
-        }
-    }
-    catch { }
-    return $killed
 }
 
 function Get-OvaBuyFileTail {

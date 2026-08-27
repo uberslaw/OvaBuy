@@ -79,8 +79,14 @@ try {
     Ensure-OvaBuyEnvFile -Paths $paths | Out-Null
 
     Write-RedeployLog "Stopping server on port $($paths.Port)" -Level STEP
-    Stop-OvaBuyServer -Port $paths.Port | Out-Null
+    $stop = Stop-OvaBuyServer -Port $paths.Port
     Clear-OvaBuyServerPid -Paths $paths
+    if ($stop.Killed.Count -gt 0) {
+        Write-RedeployLog "Stopped PIDs: $($stop.Killed -join ', ')"
+    }
+    elseif ($stop.Failed.Count -gt 0) {
+        throw "Could not stop existing app: $($stop.Failed[0].Detail)"
+    }
 
     Invoke-NpmStep -Arguments "install" -StepLabel "npm install"
     Invoke-NpmStep -Arguments "run db:deploy" -StepLabel "Database migrate (prisma migrate deploy)"
@@ -88,23 +94,26 @@ try {
 
     Write-RedeployLog "Starting production server (npm run start)" -Level STEP
     $npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
-    if (-not $npm) { $npm = "npm" }
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $npm
-    $psi.Arguments = "run start"
-    $psi.WorkingDirectory = $RepoRoot
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    Start-OvaBuyServerLogPump -Process $proc -LogPath $paths.DevServerLog
+    if (-not $npm) { $npm = "npm.cmd" }
+    $devLog = $paths.DevServerLog
+    $errLog = Join-Path $paths.LogRoot "dev-server.err.log"
+    $proc = Start-Process -FileName $npm -ArgumentList "run start" `
+        -WorkingDirectory $RepoRoot `
+        -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $devLog `
+        -RedirectStandardError $errLog
+    if (-not $proc) { throw "Failed to start npm run start" }
     Save-OvaBuyServerPid -Paths $paths -ProcessId $proc.Id -Mode "prod"
+    Write-RedeployLog "Production server PID $($proc.Id)" -Level OK
 
     Write-RedeployLog "Waiting for /api/health (up to 120s)" -Level STEP
     $deadline = (Get-Date).AddSeconds(120)
     $healthy = $false
     while ((Get-Date) -lt $deadline) {
+        if ($proc.HasExited) {
+            Write-RedeployLog "Production server exited early (exit $($proc.ExitCode))" -Level ERROR
+            break
+        }
         $health = Test-OvaBuyHealth -Url "$($paths.Url)/api/health" -TimeoutSec 3
         if ($health.Ok) {
             $healthy = $true

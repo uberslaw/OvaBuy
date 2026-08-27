@@ -1,13 +1,11 @@
 import { existsSync } from "fs";
 import { join } from "path";
 
-const FLAG_RELATIVE = join("OvaBuy", "logs", "diagnostics.enabled");
+const FLAG_PATH = join(process.cwd(), "logs", "diagnostics.enabled");
 
 export function isDiagnosticsEnabled(): boolean {
-  const base = process.env.LOCALAPPDATA;
-  if (!base) return false;
   try {
-    return existsSync(join(base, FLAG_RELATIVE));
+    return existsSync(FLAG_PATH);
   } catch {
     return false;
   }
